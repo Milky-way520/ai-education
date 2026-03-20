@@ -1,0 +1,70 @@
+# 依赖
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# 测试
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# 生产构建
+/build
+/release
+
+# 杂项
+.DS_Store
+*.pem
+
+# 调试
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 本地环境变量
+.env
+.env*.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# 数据库
+*.db
+*.db-journal
+/prisma/dev.db
+/db/*.db-journal
+
+# 上传文件
+/public/uploads/*
+!/public/uploads/.gitkeep
+
+# 日志
+*.log
+dev.log
+server.log
+.accesslog
+.stats
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+Thumbs.db
+
+# 临时文件
+.config-juicefs-bak
+*.tmp
+*.temp
+
+# skills 目录（开发工具，不需要发布）
+skills/

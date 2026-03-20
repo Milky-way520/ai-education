@@ -1,0 +1,73 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// AI模型配置
+model AIModel {
+  id          String   @id @default(cuid())
+  name        String   // 模型名称，如 GPT-4o, Claude 3.5
+  provider    String   // 提供商：openai, anthropic, google, deepseek 等
+  type        String   // 类型：understanding(理解型) 或 video(视频生成型)
+  apiKey      String?  // API密钥（加密存储）
+  baseUrl     String?  // API基础URL
+  isActive    Boolean  @default(true)
+  description String?  // 模型描述
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ai_models")
+}
+
+// 学习任务/问题
+model LearningTask {
+  id            String   @id @default(cuid())
+  title         String   // 问题标题
+  content       String   // 用户上传的内容（文字）
+  imageUrls     String?  // 图片URLs（JSON数组）
+  category      String?  // 分类：数学、物理、化学等
+  status        String   @default("pending") // pending, processing, completed, failed
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // AI理解结果
+  understanding String?  // 1.AI的理解结果
+  videoPrompt   String?  // 为视频生成准备的提示词
+  
+  // 视频生成结果
+  videoUrl      String?  // 生成的视频URL
+  videoStatus   String?  // 视频生成状态
+  
+  @@map("learning_tasks")
+}
+
+// 生成历史
+model GenerationHistory {
+  id          String   @id @default(cuid())
+  taskId      String
+  modelUsed   String   // 使用的模型
+  inputType   String   // 输入类型：text, image, pdf
+  outputType  String   // 输出类型：understanding, video
+  status      String   // success, failed
+  duration    Int?     // 耗时（毫秒）
+  createdAt   DateTime @default(now())
+
+  @@map("generation_history")
+}
+
+// 系统设置
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}

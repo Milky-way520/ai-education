@@ -1,0 +1,86 @@
+appId: com.ai-education.app
+productName: 爱的教育
+copyright: Copyright © 2024 爱的教育团队
+
+directories:
+  output: release
+  buildResources: electron/build
+
+files:
+  - electron/**/*
+  - package.json
+  - "!node_modules/**/*"
+  - "!.next/**/*"
+  - "!src/**/*"
+  - "!prisma/**/*"
+  - "!download/**/*"
+  - "!*.log"
+  - "!.*"
+
+extraResources:
+  - from: ".next/standalone"
+    to: "server"
+    filter:
+      - "**/*"
+  - from: "public"
+    to: "server/public"
+    filter:
+      - "**/*"
+  - from: "db"
+    to: "db"
+    filter:
+      - "**/*.db"
+      - "**/*.db-journal"
+
+win:
+  icon: public/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: public/icon.png
+  uninstallerIcon: public/icon.png
+  installerHeaderIcon: public/icon.png
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 爱的教育
+  license: LICENSE
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+
+portable:
+  artifactName: ${productName}-${version}-Portable.exe
+
+# Mac 配置（预留）
+mac:
+  icon: public/icon.png
+  category: public.app-category.education
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+
+# Linux 配置（预留）
+linux:
+  icon: public/icon.png
+  category: Education
+  target:
+    - target: AppImage
+      arch:
+        - x64
+
+publish: null
+
+# 压缩配置
+compression: maximum
+
+# 构建信息
+buildVersion: "1.0.0"
