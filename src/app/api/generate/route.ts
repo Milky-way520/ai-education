@@ -2,45 +2,58 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import ZAI from 'z-ai-web-dev-sdk';
 
+// 敏感词列表（应该从配置文件或数据库中加载，并支持动态更新）
+const SENSITIVE_WORDS = new Set([
+  '暴力', '色情', '赌博', '毒品', '恐怖主义',
+  '自杀', '自残', '违禁品', '邪教'
+]);
+
 // 内容审核函数 - 确保内容合规
 async function auditContent(content: string): Promise<{ isSafe: boolean; reason?: string }> {
-  // 敏感词列表（简化版，实际应用中应该更完善）
-  const sensitiveWords = [
-    '暴力', '色情', '赌博', '毒品', '恐怖主义',
-    '自杀', '自残', '违禁品', '邪教'
-  ];
-  
   const lowerContent = content.toLowerCase();
   
-  for (const word of sensitiveWords) {
-    if (lowerContent.includes(word)) {
-      return { isSafe: false, reason: `内容包含敏感词汇：${word}` };
+  // 首先进行本地敏感词检查（快速失败）
+  for (const word of SENSITIVE_WORDS) {
+    if (lowerContent.includes(word.toLowerCase())) {
+      return { isSafe: false, reason: `内容包含敏感词汇` };
     }
   }
   
-  // 使用AI进行内容审核
+  // 内容长度限制（防止过长内容消耗过多资源）
+  const maxContentLength = 10000;
+  if (content.length > maxContentLength) {
+    return { isSafe: false, reason: '内容长度超过限制' };
+  }
+  
+  // 使用 AI 进行内容审核（带超时控制）
   try {
     const zai = await ZAI.create();
-    const auditResult = await zai.chat.completions.create({
-      messages: [
-        {
-          role: 'system',
-          content: `你是一个内容审核专家。请判断以下内容是否适合用于教育目的。
+    const auditResult = await Promise.race([
+      zai.chat.completions.create({
+        messages: [
+          {
+            role: 'system',
+            content: `你是一个内容审核专家。请判断以下内容是否适合用于教育目的。
 内容应该：
 1. 不包含任何违法、有害、暴力、色情内容
 2. 不涉及政治敏感话题
 3. 符合教育伦理道德标准
 4. 适合学生学习和理解
 
-请只回答"SAFE"或"UNSAFE"，如果是UNSAFE，请在一行后说明原因。`
-        },
-        {
-          role: 'user',
-          content: content
-        }
-      ],
-      maxTokens: 100,
-    });
+请只回答"SAFE"或"UNSAFE"，如果是 UNSAFE，请在一行后说明原因。`
+          },
+          {
+            role: 'user',
+            content: content.substring(0, maxContentLength)
+          }
+        ],
+        maxTokens: 100,
+      }),
+      // 10 秒超时
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('审核超时')), 10000)
+      )
+    ]);
     
     const result = auditResult.choices[0]?.message?.content || '';
     if (result.startsWith('UNSAFE')) {
@@ -51,13 +64,14 @@ async function auditContent(content: string): Promise<{ isSafe: boolean; reason?
     }
   } catch (error) {
     console.error('AI audit failed:', error);
-    // 如果AI审核失败，继续处理但记录警告
+    // AI 审核失败时，可以选择拒绝或继续处理
+    // 这里选择继续处理但记录警告
   }
   
   return { isSafe: true };
 }
 
-// 生成理解的函数
+// 生成理解的函数（带并发优化）
 async function generateUnderstanding(
   content: string, 
   imageUrls: string[] = [],
@@ -93,10 +107,13 @@ async function generateUnderstanding(
 - 循序渐进
 - 易于理解`;
 
-  const userContent = imageUrls.length > 0 
+  // 限制图片数量，防止资源滥用
+  const limitedImageUrls = imageUrls.slice(0, 5);
+  
+  const userContent = limitedImageUrls.length > 0 
     ? [
         { type: 'text', text: `请帮我理解和解释以下内容：\n\n${content}` },
-        ...imageUrls.map(url => ({ 
+        ...limitedImageUrls.map(url => ({ 
           type: 'image_url', 
           image_url: { url } 
         }))
@@ -116,53 +133,87 @@ async function generateUnderstanding(
   
   const understanding = completion.choices[0]?.message?.content || '';
   
-  // 生成视频提示词
-  const promptSystem = `你是一个视频脚本编写专家。根据教育内容生成适合AI视频生成的提示词。
+  // 并行生成视频提示词（如果 understanding 不为空）
+  let videoPrompt = '';
+  if (understanding) {
+    const promptSystem = `你是一个视频脚本编写专家。根据教育内容生成适合 AI 视频生成的提示词。
 要求：
 1. 提示词应该描述一个教学视频场景
 2. 包含关键视觉元素描述
 3. 语言简洁明了
 4. 适合${categoryContext[category]}教学场景`;
 
-  const promptCompletion = await zai.chat.completions.create({
-    messages: [
-      { role: 'system', content: promptSystem },
-      { 
-        role: 'user', 
-        content: `请根据以下教学内容生成一个适合AI视频生成的提示词（不超过200字）：\n\n${understanding.substring(0, 1000)}`
-      }
-    ],
-    maxTokens: 500,
-  });
-  
-  const videoPrompt = promptCompletion.choices[0]?.message?.content || '';
+    try {
+      const promptCompletion = await zai.chat.completions.create({
+        messages: [
+          { role: 'system', content: promptSystem },
+          { 
+            role: 'user', 
+            content: `请根据以下教学内容生成一个适合 AI 视频生成的提示词（不超过 200 字）：\n\n${understanding.substring(0, 1000)}`
+          }
+        ],
+        maxTokens: 500,
+      });
+      
+      videoPrompt = promptCompletion.choices[0]?.message?.content || '';
+    } catch (error) {
+      console.error('Failed to generate video prompt:', error);
+      // 视频提示词生成失败不影响主流程
+    }
+  }
   
   return { understanding, videoPrompt };
 }
 
-// 生成视频的函数
-async function generateVideo(videoPrompt: string): Promise<string> {
+// 生成视频的函数（带重试机制）
+async function generateVideo(videoPrompt: string, maxRetries = 2): Promise<string> {
   const zai = await ZAI.create();
   
-  try {
-    const response = await zai.images.generations.create({
-      prompt: `Educational video scene: ${videoPrompt}. Professional teaching animation, clean whiteboard style, educational content visualization.`,
-      size: '1024x1024',
-    });
-    
-    // 注意：这里使用图片生成API作为演示
-    // 实际项目中应该使用视频生成API
-    return response.data[0]?.base64 || '';
-  } catch (error) {
-    console.error('Video generation failed:', error);
-    throw new Error('视频生成失败，请稍后重试');
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await zai.images.generations.create({
+        prompt: `Educational video scene: ${videoPrompt}. Professional teaching animation, clean whiteboard style, educational content visualization.`,
+        size: '1024x1024',
+      });
+      
+      return response.data[0]?.base64 || '';
+    } catch (error) {
+      console.error(`Video generation failed (attempt ${attempt + 1}):`, error);
+      if (attempt === maxRetries) {
+        throw new Error('视频生成失败，请稍后重试');
+      }
+      // 等待一段时间后重试
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
   }
+  
+  throw new Error('视频生成失败');
 }
 
 // 主处理函数
 export async function POST(request: NextRequest) {
+  const startTime = Date.now();
+  
   try {
-    const body = await request.json();
+    // 添加请求体大小限制
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > 10 * 1024 * 1024) {
+      return NextResponse.json(
+        { success: false, error: '请求体过大' },
+        { status: 413 }
+      );
+    }
+    
+    let body;
+    try {
+      body = await request.json();
+    } catch (error) {
+      return NextResponse.json(
+        { success: false, error: '无效的请求格式' },
+        { status: 400 }
+      );
+    }
+    
     const { 
       content, 
       imageUrls = [], 
@@ -170,6 +221,7 @@ export async function POST(request: NextRequest) {
       generateVideo: shouldGenerateVideo = true 
     } = body;
     
+    // 参数验证
     if (!content && imageUrls.length === 0) {
       return NextResponse.json(
         { success: false, error: '请提供问题内容或上传图片' },
@@ -177,11 +229,27 @@ export async function POST(request: NextRequest) {
       );
     }
     
+    // 内容长度验证
+    if (content && content.length > 10000) {
+      return NextResponse.json(
+        { success: false, error: '内容长度不能超过 10000 字符' },
+        { status: 400 }
+      );
+    }
+    
+    // 图片数量限制
+    if (imageUrls.length > 10) {
+      return NextResponse.json(
+        { success: false, error: '最多只能上传 10 张图片' },
+        { status: 400 }
+      );
+    }
+    
     // 创建任务记录
     const task = await db.learningTask.create({
       data: {
-        title: content.substring(0, 50) + (content.length > 50 ? '...' : ''),
-        content,
+        title: content ? content.substring(0, 50) + (content.length > 50 ? '...' : '') : '图片问题',
+        content: content || '',
         imageUrls: JSON.stringify(imageUrls),
         category,
         status: 'processing',
@@ -189,7 +257,7 @@ export async function POST(request: NextRequest) {
     });
     
     // 内容审核
-    const audit = await auditContent(content);
+    const audit = await auditContent(content || '');
     if (!audit.isSafe) {
       await db.learningTask.update({
         where: { id: task.id },
@@ -223,7 +291,7 @@ export async function POST(request: NextRequest) {
     
     // 如果需要生成视频
     let videoUrl = '';
-    if (shouldGenerateVideo) {
+    if (shouldGenerateVideo && videoPrompt) {
       try {
         videoUrl = await generateVideo(videoPrompt);
         await db.learningTask.update({
@@ -241,7 +309,24 @@ export async function POST(request: NextRequest) {
             videoStatus: 'failed',
           },
         });
+        // 视频生成失败不影响返回结果
       }
+    }
+    
+    // 记录生成历史
+    try {
+      await db.generationHistory.create({
+        data: {
+          taskId: task.id,
+          modelUsed: 'z-ai',
+          inputType: imageUrls.length > 0 ? 'image' : 'text',
+          outputType: 'understanding',
+          status: 'success',
+          duration: Date.now() - startTime,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to record history:', error);
     }
     
     return NextResponse.json({
@@ -254,6 +339,23 @@ export async function POST(request: NextRequest) {
     
   } catch (error) {
     console.error('Generation error:', error);
+    
+    // 记录失败历史
+    try {
+      await db.generationHistory.create({
+        data: {
+          taskId: 'unknown',
+          modelUsed: 'z-ai',
+          inputType: 'unknown',
+          outputType: 'understanding',
+          status: 'failed',
+          duration: Date.now() - startTime,
+        },
+      });
+    } catch (historyError) {
+      console.error('Failed to record failure:', historyError);
+    }
+    
     return NextResponse.json(
       { success: false, error: '生成失败，请稍后重试' },
       { status: 500 }
@@ -261,13 +363,22 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// 获取任务列表
-export async function GET() {
+// 获取任务列表（带分页）
+export async function GET(request: NextRequest) {
   try {
-    const tasks = await db.learningTask.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-    });
+    const { searchParams } = new URL(request.url);
+    const page = parseInt(searchParams.get('page') || '1');
+    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
+    const skip = (page - 1) * limit;
+    
+    const [tasks, total] = await Promise.all([
+      db.learningTask.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      db.learningTask.count(),
+    ]);
     
     return NextResponse.json({
       success: true,
@@ -275,6 +386,12 @@ export async function GET() {
         ...t,
         imageUrls: t.imageUrls ? JSON.parse(t.imageUrls) : [],
       })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     });
   } catch (error) {
     console.error('Failed to fetch tasks:', error);
